@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Talksy - Sesli ve Yazılı Sohbet</title>
+
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+
+  <style>
+    body {
+      background-color: #f5f5f5;
+    }
+
+    .talksy-container {
+      max-width: 600px;
+      margin: 50px auto;
+      padding: 20px;
+      background-color: white;
+      border-radius: 10px;
+      box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+    }
+
+    #usersList {
+      max-height: 150px;
+      overflow-y: auto;
+      margin-bottom: 10px;
+      background-color: #e9ecef;
+      border-radius: 5px;
+      list-style-type: none;
+      padding: 10px;
+    }
+
+    #chat {
+      height: 150px;
+      overflow-y: auto;
+      background-color: #e9ecef;
+      border-radius: 5px;
+      margin-bottom: 10px;
+    }
+
+    .video-preview {
+      width: 100px;
+      height: 75px;
+      cursor: pointer;
+      margin-top: 10px;
+      border: 1px solid #ccc;
+      border-radius: 5px;
+      object-fit: cover;
+    }
+
+    .video-fullscreen {
+      width: 100%;
+      height: 400px;
+      object-fit: contain;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="talksy-container">
+    <h1 class="text-center">Talksy</h1>
+
+    <input id="roomInput" class="form-control mb-3" placeholder="Oda ID girin" />
+    <button class="btn btn-primary w-100 mb-2" onclick="joinRoom()">Odaya Katıl</button>
+
+    <ul id="usersList" class="mb-3"></ul>
+
+    <select id="statusSelect" class="form-select mb-3" onchange="changeStatus()">
+      <option value="online">Çevrimiçi</option>
+      <option value="busy">Meşgul</option>
+      <option value="afk">AFK</option>
+    </select>
+
+    <div id="chat"></div>
+
+    <div class="input-group mt-3">
+      <input id="messageInput" type="text" class="form-control" placeholder="Mesajınızı yazın" />
+      <button class="btn btn-success" onclick="sendMessage()">Gönder</button>
+    </div>
+
+    <button class="btn btn-secondary w-100 mt-3" onclick="shareScreen()">Ekran Paylaş</button>
+
+    <video id="screenPreview" class="video-preview"></video>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const { ipcRenderer } = require('electron');
+    const socket = io();
+    let roomId;
+
+    function joinRoom() {
+      roomId = document.getElementById('roomInput').value;
+      if (!roomId) {
+        alert("Lütfen bir oda ID'si girin.");
+        return;
+      }
+      socket.emit('join-room', roomId);
+    }
+
+    function changeStatus() {
+      const status = document.getElementById('statusSelect').value;
+      socket.emit('change-status', status);
+    }
+
+    function sendMessage() {
+      const message = document.getElementById('messageInput').value;
+      socket.emit('send-message', roomId, message);
+      document.getElementById('messageInput').value = '';
+    }
+
+    async function shareScreen() {
+      try {
+        const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+        const videoElement = document.getElementById('screenPreview');
+        videoElement.srcObject = screenStream;
+        videoElement.play();
+
+        videoElement.onclick = () => toggleFullscreen(videoElement);
+      } catch (error) {
+        console.error('Ekran paylaşımı hatası:', error);
+      }
+    }
+
+    function toggleFullscreen(videoElement) {
+      if (videoElement.classList.contains('video-preview')) {
+        videoElement.classList.remove('video-preview');
+        videoElement.classList.add('video-fullscreen');
+      } else {
+        videoElement.classList.remove('video-fullscreen');
+        videoElement.classList.add('video-preview');
+      }
+    }
+
+    function showUserMenu(event, userId) {
+      event.preventDefault();
+      const menu = document.createElement('div');
+      menu.style.position = 'absolute';
+      menu.style.top = `${event.clientY}px`;
+      menu.style.left = `${event.clientX}px`;
+      menu.style.background = '#fff';
+      menu.style.border = '1px solid #ccc';
+      menu.style.padding = '10px';
+      menu.style.borderRadius = '5px';
+      menu.innerHTML = `
+        <button onclick="muteUser('${userId}')">Sustur</button>
+        <button onclick="kickUser('${userId}')">At</button>
+      `;
+      document.body.appendChild(menu);
+
+      document.addEventListener('click', () => {
+        menu.remove();
+      }, { once: true });
+    }
+
+    function muteUser(userId) {
+      socket.emit('mute-user', roomId, userId);
+    }
+
+    function kickUser(userId) {
+      socket.emit('kick-user', roomId, userId);
+    }
+
+    socket.on('user-connected', (userId) => {
+      const userItem = document.createElement('li');
+      userItem.textContent = userId;
+      userItem.oncontextmenu = (event) => showUserMenu(event, userId);
+      document.getElementById('usersList').appendChild(userItem);
+    });
+
+    socket.on('receive-message', (data) => {
+      const chat = document.getElementById('chat');
+      chat.innerHTML += `<p><strong>${data.userId}:</strong> ${data.message}</p>`;
+      chat.scrollTop = chat.scrollHeight; // Otomatik kaydırma
+    });
+
+    socket.on('muted', () => {
+      alert('Susturuldunuz!');
+    });
+
+    socket.on('kicked', () => {
+      alert('Odadan atıldınız!');
+      window.location.reload();
+    });
+
+    socket.on('status-updated', (data) => {
+      console.log(`${data.userId} durumu: ${data.status}`);
+    });
+
+    // Otomatik güncelleme kontrolü
+    ipcRenderer.on('update_available', () => {
+      if (confirm('Yeni bir güncelleme mevcut. Şimdi indirilmesini ister misiniz?')) {
+        ipcRenderer.send('restart_app');
+      }
+    });
+
+    ipcRenderer.on('update_downloaded', () => {
+      if (confirm('Güncelleme indirildi. Uygulama şimdi yeniden başlatılacak. Devam etmek ister misiniz?')) {
+        ipcRenderer.send('restart_app');
+      }
+    });
+  </script>
+
+</body>
+</html>
